@@ -1,0 +1,37 @@
+app:
+  name: "Secure Task Management API"
+  version: "1.0.0"
+  port: 8080
+  environment: "development"
+  read_timeout: 10
+  write_timeout: 10
+  idle_timeout: 60
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: ""          # Load from ENV
+  dbname: "goapi"
+  sslmode: "disable"
+  max_open_conns: 25
+  max_idle_conns: 25
+  conn_max_lifetime: "5m"
+
+jwt:
+  secret: ""             # Load from ENV
+  access_token_duration: "15m"
+  refresh_token_duration: "168h"
+
+sentry:
+  dsn: ""
+  environment: "development"
+  sample_rate: 1.0
+
+logging:
+  level: "debug"
+  encoding: "json"
+  output_paths:
+    - "stdout"
+  error_output_paths:
+    - "stderr"
