@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -36,13 +37,13 @@ type DatabaseConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
-
-	dsn string
+	DSN             string // Full connection string override
 }
 
-func (d DatabaseConfig) DSN() string {
-	if d.dsn != "" {
-		return d.dsn
+func (d DatabaseConfig) GetDSN() string {
+	// If full DATABASE_URL is provided, use it
+	if d.DSN != "" {
+		return d.DSN
 	}
 
 	return fmt.Sprintf(
@@ -78,40 +79,88 @@ type LoggingConfig struct {
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 
-	// ONLY use environment variables (from Render)
+	// Use environment variables
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// Defaults
-	v.SetDefault("app.port", 8080)
-	v.SetDefault("app.environment", "development")
-	v.SetDefault("database.port", 5432)
-	v.SetDefault("database.sslmode", "disable")
-	v.SetDefault("logging.level", "info")
-	v.SetDefault("logging.encoding", "json")
+	// Set defaults
+	v.SetDefault("APP_PORT", "8080")
+	v.SetDefault("APP_ENVIRONMENT", "development")
+	v.SetDefault("DB_PORT", "5432")
+	v.SetDefault("DB_SSLMODE", "require") // Render requires SSL
+	v.SetDefault("LOG_LEVEL", "info")
+	v.SetDefault("LOG_ENCODING", "json")
 
-	// Bind environment variables exactly as you have in Render
-	_ = v.BindEnv("APP_PORT")
-	_ = v.BindEnv("APP_ENV")
-	_ = v.BindEnv("DB_HOST")
-	_ = v.BindEnv("DB_PORT")
-	_ = v.BindEnv("DB_USER")
-	_ = v.BindEnv("DB_PASSWORD")
-	_ = v.BindEnv("DB_NAME")
-	_ = v.BindEnv("JWT_SECRET")
-	_ = v.BindEnv("SENTRY_DSN")
-	_ = v.BindEnv("LOG_LEVEL")
-
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("config parsing failed: %w", err)
+	// Helper to get env var with fallback
+	getEnv := func(key, fallback string) string {
+		if val := os.Getenv(key); val != "" {
+			return val
+		}
+		return fallback
 	}
 
-	// Set timeouts (optional)
-	cfg.App.ReadTimeout = time.Duration(v.GetInt("app.read_timeout")) * time.Second
-	cfg.App.WriteTimeout = time.Duration(v.GetInt("app.write_timeout")) * time.Second
-	cfg.App.IdleTimeout = time.Duration(v.GetInt("app.idle_timeout")) * time.Second
-	cfg.Database.ConnMaxLifetime = time.Duration(v.GetInt("database.conn_max_lifetime")) * time.Minute
+	// Parse durations safely
+	parseDuration := func(val string, defaultVal time.Duration) time.Duration {
+		if val == "" {
+			return defaultVal
+		}
+		d, err := time.ParseDuration(val)
+		if err != nil {
+			return defaultVal
+		}
+		return d
+	}
 
-	return &cfg, nil
+	// Build config explicitly from environment variables
+	cfg := &Config{
+		App: AppConfig{
+			Name:         getEnv("APP_NAME", "Secure Task Management API"),
+			Version:      getEnv("APP_VERSION", "1.0.0"),
+			Port:         v.GetInt("APP_PORT"),
+			Environment:  getEnv("APP_ENVIRONMENT", "development"),
+			ReadTimeout:  parseDuration(os.Getenv("APP_READ_TIMEOUT"), 15*time.Second),
+			WriteTimeout: parseDuration(os.Getenv("APP_WRITE_TIMEOUT"), 15*time.Second),
+			IdleTimeout:  parseDuration(os.Getenv("APP_IDLE_TIMEOUT"), 60*time.Second),
+		},
+		Database: DatabaseConfig{
+			// Check for DATABASE_URL first (Render provides this)
+			DSN:             getEnv("DATABASE_URL", ""),
+			Host:            getEnv("DB_HOST", "localhost"),
+			Port:            v.GetInt("DB_PORT"),
+			User:            getEnv("DB_USER", ""),
+			Password:        getEnv("DB_PASSWORD", ""),
+			DBName:          getEnv("DB_NAME", ""),
+			SSLMode:         getEnv("DB_SSLMODE", "require"),
+			MaxOpenConns:    v.GetInt("DB_MAX_OPEN_CONNS"),
+			MaxIdleConns:    v.GetInt("DB_MAX_IDLE_CONNS"),
+			ConnMaxLifetime: parseDuration(os.Getenv("DB_CONN_MAX_LIFETIME"), 30*time.Minute),
+		},
+		JWT: JWTConfig{
+			Secret:               getEnv("JWT_SECRET", ""),
+			AccessTokenDuration:  parseDuration(os.Getenv("JWT_ACCESS_DURATION"), 15*time.Minute),
+			RefreshTokenDuration: parseDuration(os.Getenv("JWT_REFRESH_DURATION"), 7*24*time.Hour),
+		},
+		Sentry: SentryConfig{
+			DSN:         getEnv("SENTRY_DSN", ""),
+			Environment: getEnv("SENTRY_ENVIRONMENT", getEnv("APP_ENVIRONMENT", "development")),
+			SampleRate:  v.GetFloat64("SENTRY_SAMPLE_RATE"),
+		},
+		Logging: LoggingConfig{
+			Level:            getEnv("LOG_LEVEL", "info"),
+			Encoding:         getEnv("LOG_ENCODING", "json"),
+			OutputPaths:      strings.Split(getEnv("LOG_OUTPUT_PATHS", "stdout"), ","),
+			ErrorOutputPaths: strings.Split(getEnv("LOG_ERROR_OUTPUT_PATHS", "stderr"), ","),
+		},
+	}
+
+	// Validate required fields
+	if cfg.Database.DSN == "" && (cfg.Database.Host == "" || cfg.Database.User == "") {
+		return nil, fmt.Errorf("database configuration missing: set DATABASE_URL or DB_HOST/DB_USER/DB_PASSWORD/DB_NAME")
+	}
+
+	if cfg.JWT.Secret == "" {
+		return nil, fmt.Errorf("JWT_SECRET is required")
+	}
+
+	return cfg, nil
 }

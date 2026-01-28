@@ -79,17 +79,14 @@ func main() {
 	router := handlers.NewRouter(cfg, repo, jwtManager, log).SetupRoutes()
 
 	// Wrap router with middleware
-	// Logs every request and normalizes trailing slashes
 	handler := middleware.StripTrailingSlash(
-		middleware.RequestLoggingMiddleware(log)(
-			router,
-		),
+		middleware.RequestLoggingMiddleware(log)(router),
 	)
 
 	// Configure HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.App.Port),
-		Handler:      handler, // use wrapped handler
+		Handler:      handler,
 		ReadTimeout:  cfg.App.ReadTimeout,
 		WriteTimeout: cfg.App.WriteTimeout,
 		IdleTimeout:  cfg.App.IdleTimeout,
@@ -128,8 +125,10 @@ func initDatabase(cfg config.DatabaseConfig) (*sql.DB, error) {
 	maxRetries := 5
 	retryDelay := 2 * time.Second
 
+	dsn := cfg.GetDSN()
+
 	for i := 0; i < maxRetries; i++ {
-		db, err = sql.Open("pgx", cfg.DSN())
+		db, err = sql.Open("pgx", dsn)
 		if err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err = db.PingContext(ctx)
@@ -138,6 +137,7 @@ func initDatabase(cfg config.DatabaseConfig) (*sql.DB, error) {
 				break
 			}
 		}
+
 		if i < maxRetries-1 {
 			time.Sleep(retryDelay)
 		}
@@ -148,9 +148,15 @@ func initDatabase(cfg config.DatabaseConfig) (*sql.DB, error) {
 	}
 
 	// Configure connection pool
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	if cfg.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+	if cfg.MaxIdleConns > 0 {
+		db.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+	if cfg.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	}
 
 	return db, nil
 }
