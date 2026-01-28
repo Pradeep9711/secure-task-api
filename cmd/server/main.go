@@ -18,12 +18,11 @@ import (
 	"secure-task-api/internal/config"
 	"secure-task-api/internal/handlers"
 	"secure-task-api/internal/logger"
-	"secure-task-api/internal/middleware"
 	"secure-task-api/internal/repository"
 )
 
 func main() {
-	// Load application configuration
+	// Load config
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Printf("Failed to load config: %v\n", err)
@@ -44,7 +43,7 @@ func main() {
 		zap.String("environment", cfg.App.Environment),
 	)
 
-	// Initialize Sentry if DSN is provided
+	// Initialize Sentry
 	if cfg.Sentry.DSN != "" {
 		if err := sentry.Init(sentry.ClientOptions{
 			Dsn:         cfg.Sentry.DSN,
@@ -65,26 +64,21 @@ func main() {
 	defer db.Close()
 	log.Info("Database connection established")
 
-	// Setup repository
+	// Setup dependencies
 	repo := repository.NewRepository(db)
-
-	// Setup JWT manager
 	jwtManager := auth.NewJWTManager(
 		cfg.JWT.Secret,
 		cfg.JWT.AccessTokenDuration,
 		cfg.JWT.RefreshTokenDuration,
 	)
 
-	// Setup routes
+	// Setup router - NO external middleware wrapping
 	router := handlers.NewRouter(cfg, repo, jwtManager, log).SetupRoutes()
 
-	// Wrap router only with request logging middleware
-	handler := middleware.RequestLoggingMiddleware(log)(router)
-
-	// Configure HTTP server
+	// Create server
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.App.Port),
-		Handler:      handler,
+		Handler:      router, // Direct use, no StripTrailingSlash wrapper
 		ReadTimeout:  cfg.App.ReadTimeout,
 		WriteTimeout: cfg.App.WriteTimeout,
 		IdleTimeout:  cfg.App.IdleTimeout,
@@ -98,17 +92,15 @@ func main() {
 		}
 	}()
 
-	// Wait for shutdown signal
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	log.Info("Shutting down server...")
-
-	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
+	
 	if err := server.Shutdown(ctx); err != nil {
 		log.Error("Server shutdown forced", zap.Error(err))
 	}
@@ -116,7 +108,6 @@ func main() {
 	log.Info("Server exited cleanly")
 }
 
-// initDatabase connects to PostgreSQL and configures the pool
 func initDatabase(cfg config.DatabaseConfig) (*sql.DB, error) {
 	var db *sql.DB
 	var err error
@@ -144,7 +135,6 @@ func initDatabase(cfg config.DatabaseConfig) (*sql.DB, error) {
 		return nil, fmt.Errorf("database connection failed after %d attempts: %w", maxRetries, err)
 	}
 
-	// Configure connection pool
 	if cfg.MaxOpenConns > 0 {
 		db.SetMaxOpenConns(cfg.MaxOpenConns)
 	}
