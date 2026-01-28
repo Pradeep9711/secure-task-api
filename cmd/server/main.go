@@ -78,10 +78,8 @@ func main() {
 	// Setup routes
 	router := handlers.NewRouter(cfg, repo, jwtManager, log).SetupRoutes()
 
-	// Wrap router with middleware
-	handler := middleware.StripTrailingSlash(
-		middleware.RequestLoggingMiddleware(log)(router),
-	)
+	// Wrap router only with request logging middleware
+	handler := middleware.RequestLoggingMiddleware(log)(router)
 
 	// Configure HTTP server
 	server := &http.Server{
@@ -137,7 +135,6 @@ func initDatabase(cfg config.DatabaseConfig) (*sql.DB, error) {
 				break
 			}
 		}
-
 		if i < maxRetries-1 {
 			time.Sleep(retryDelay)
 		}

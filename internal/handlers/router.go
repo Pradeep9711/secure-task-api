@@ -45,6 +45,12 @@ func (r *Router) SetupRoutes() chi.Router {
 	router.Use(NewStructuredLogger(r.log).Middleware)
 	router.Use(chimiddleware.Recoverer)
 
+	// Root route to avoid 404
+	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Secure Task Management API is running"))
+	})
+
 	// System and diagnostic endpoints.
 	systemHandler := NewSystemHandler(r.repo, r.log)
 	router.Get("/health", systemHandler.HealthCheck)
